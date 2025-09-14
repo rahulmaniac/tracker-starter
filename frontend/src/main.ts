@@ -1,10 +1,21 @@
 import 'zone.js';
 import { bootstrapApplication } from '@angular/platform-browser';
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { DragDropModule, CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop';
+import Keycloak, { KeycloakInstance } from 'keycloak-js';
 
 type Issue = { id: string; title: string; type: string; status_name?: string };
+
+// tiny toast
+type Toast = { id: number; text: string };
+const toasts = signal<Toast[]>([]);
+let _toastId = 1;
+function toast(text: string, ms = 2500) {
+  const id = _toastId++;
+  toasts.update(ts => [...ts, { id, text }]);
+  setTimeout(() => toasts.update(ts => ts.filter(t => t.id !== id)), ms);
+}
 
 @Component({
   selector: 'app-root',
@@ -12,6 +23,7 @@ type Issue = { id: string; title: string; type: string; status_name?: string };
   imports: [CommonModule, DragDropModule],
   styles: [`
     header { padding:12px; border-bottom:1px solid #ddd; display:flex; gap:12px; align-items:center; }
+    .spacer { flex: 1; }
     .board { display:flex; gap:12px; align-items:flex-start; }
     .col { flex:1; border:1px solid #ddd; border-radius:8px; padding:8px; min-height:120px; background:#fafafa; }
     .card { padding:8px; border:1px solid #eee; border-radius:6px; margin:6px 0; background:#fff; cursor:grab; }
@@ -24,10 +36,20 @@ type Issue = { id: string; title: string; type: string; status_name?: string };
     .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
     input, select, textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:8px; }
     textarea { min-height: 100px; resize: vertical; }
+    .toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 9999; }
+    .toast { background:#333; color:#fff; padding:10px 12px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.2); }
   `],
   template: `
     <header>
-      <h2 style="margin:0; flex:1;">Tracker — Phase-1</h2>
+      <h2 style="margin:0;">Tracker — Phase-1</h2>
+      <div class="spacer"></div>
+      <ng-container *ngIf="authUser(); else loggedOut">
+        <span>👋 {{authUser()}}</span>
+        <button class="btn" (click)="logout()">Logout</button>
+      </ng-container>
+      <ng-template #loggedOut>
+        <button class="btn" (click)="login()">Login</button>
+      </ng-template>
       <button class="btn" (click)="openNew()">+ New Issue</button>
     </header>
 
@@ -53,7 +75,6 @@ type Issue = { id: string; title: string; type: string; status_name?: string };
       </section>
     </main>
 
-    <!-- Create Issue dialog -->
     <dialog id="newIssue">
       <form class="dlg" (submit)="submitNew($event)">
         <h3 style="margin:0 0 12px;">Create Issue</h3>
@@ -81,6 +102,10 @@ type Issue = { id: string; title: string; type: string; status_name?: string };
         </div>
       </form>
     </dialog>
+
+    <div class="toasts">
+      <div class="toast" *ngFor="let t of tlist()">{{t.text}}</div>
+    </div>
   `
 })
 class AppComponent implements OnInit {
@@ -91,16 +116,42 @@ class AppComponent implements OnInit {
     { name: 'Done', items: [] }
   ]);
 
+  private kc: KeycloakInstance | null = null;
+  authUser = signal<string | null>(null);
+  tlist = computed(() => toasts());
   trackIssue = (_: number, i: Issue) => i.id;
 
   async ngOnInit() {
-    // 1) Load workflow → set columns
+    // Keycloak init (guarded)
+    try {
+      const kc = new (Keycloak as any)({
+        url: 'http://192.168.0.225:8080',
+        realm: 'tracker',
+        clientId: 'tracker-web'
+      }) as KeycloakInstance;
+      this.kc = kc;
+
+      await kc.init({
+        onLoad: 'check-sso',
+        pkceMethod: 'S256',
+        silentCheckSsoRedirectUri: window.location.origin + '/silent-check-sso.html'
+      }).catch(() => null);
+
+      if (kc.authenticated) {
+        this.authUser.set(kc.tokenParsed?.preferred_username || kc.tokenParsed?.email || 'user');
+        toast('Logged in');
+      }
+    } catch (e) {
+      console.warn('Keycloak init skipped/failed', e);
+    }
+
+    // Load workflow
     const wf = await fetch(`/api/projects/${this.projectKey}/workflow`).then(r => r.json());
     if (Array.isArray(wf) && wf.length) {
       this.columns.set(wf.map((row: any) => ({ name: row.name, items: [] })));
     }
 
-    // 2) Load issues → distribute into columns by status_name
+    // Load issues
     const issues: Issue[] = await fetch(`/api/issues?project=${this.projectKey}`).then(r => r.json());
     const cols = this.columns();
     for (const i of issues) {
@@ -110,38 +161,22 @@ class AppComponent implements OnInit {
     this.columns.set([...cols]);
   }
 
-  async drop(event: CdkDragDrop<Issue[]>, destName: string) {
-    const cols = this.columns();
-    if (event.previousContainer === event.container) {
-      moveItemInArray(event.container.data, event.previousIndex, event.currentIndex);
-    } else {
-      transferArrayItem(
-        event.previousContainer.data,
-        event.container.data,
-        event.previousIndex,
-        event.currentIndex
-      );
-    }
-    this.columns.set([...cols]);
-
-    const moved: Issue = event.item.data;
+  async login() {
+    if (!this.kc) return;
+    try { await this.kc.login({ redirectUri: window.location.href }); } catch (e) { console.error(e); }
+  }
+  async logout() {
+    if (!this.kc) return;
     try {
-      await fetch(`/api/issues/${moved.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_key: this.projectKey, status_name: destName })
-      });
-    } catch (e) {
-      console.error('Failed to persist status', e);
-    }
+      await this.kc.logout({ redirectUri: window.location.origin });
+      this.authUser.set(null);
+      toast('Logged out');
+    } catch (e) { console.error(e); }
   }
 
-  openNew() {
-    (document.getElementById('newIssue') as HTMLDialogElement).showModal();
-  }
-  closeNew() {
-    (document.getElementById('newIssue') as HTMLDialogElement).close();
-  }
+  openNew() { (document.getElementById('newIssue') as HTMLDialogElement).showModal(); }
+  closeNew() { (document.getElementById('newIssue') as HTMLDialogElement).close(); }
+
   async submitNew(ev: Event) {
     ev.preventDefault();
     const form = ev.target as HTMLFormElement;
@@ -149,7 +184,6 @@ class AppComponent implements OnInit {
     const title = (fd.get('title') || '').toString().trim();
     const type = (fd.get('type') || 'TASK').toString();
     const description = (fd.get('description') || '').toString();
-
     if (!title) return;
 
     try {
@@ -161,16 +195,39 @@ class AppComponent implements OnInit {
       const createdArr = await res.json();
       const created: Issue = Array.isArray(createdArr) ? createdArr[0] : createdArr;
 
-      // Put into first column by default (backend places it in the first workflow state)
       const cols = this.columns();
       created.status_name = cols[0].name;
       cols[0].items.unshift(created);
       this.columns.set([...cols]);
-
+      toast('Issue created');
       form.reset();
       this.closeNew();
     } catch (e) {
       console.error('Create failed', e);
+      toast('Failed to create issue');
+    }
+  }
+
+  async drop(event: CdkDragDrop<Issue[]>, destName: string) {
+    const cols = this.columns();
+    if (event.previousContainer === event.container) {
+      moveItemInArray(event.container.data, event.previousIndex, event.currentIndex);
+    } else {
+      transferArrayItem(event.previousContainer.data, event.container.data, event.previousIndex, event.currentIndex);
+    }
+    this.columns.set([...cols]);
+
+    const moved: Issue = event.item.data;
+    try {
+      await fetch(`/api/issues/${moved.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_key: this.projectKey, status_name: destName })
+      });
+      toast(`Moved #${moved.id} → ${destName}`);
+    } catch (e) {
+      console.error('Failed to persist status', e);
+      toast('Failed to move issue');
     }
   }
 }
