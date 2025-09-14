@@ -1,48 +1,100 @@
-import 'zone.js'; // required for Angular change detection
+import 'zone.js';
 import { bootstrapApplication } from '@angular/platform-browser';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { DragDropModule, CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop';
+
+type Issue = { id: string; title: string; type: string; status_name?: string };
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule], // <-- enables *ngFor, etc.
+  imports: [CommonModule, DragDropModule],
+  styles: [`
+    .board { display:flex; gap:12px; align-items:flex-start; }
+    .col { flex:1; border:1px solid #ddd; border-radius:8px; padding:8px; min-height:120px; background:#fafafa; }
+    .card { padding:8px; border:1px solid #eee; border-radius:6px; margin:6px 0; background:#fff; cursor:grab; }
+    .col h4 { margin:4px 0 8px; }
+  `],
   template: `
     <header style="padding:12px;border-bottom:1px solid #ddd;">
       <h2 style="margin:0;">Tracker — Phase-1</h2>
     </header>
     <main style="padding:16px;">
-      <p>Project: <strong>HOME</strong></p>
-      <section style="display:flex; gap:12px;">
-        <div *ngFor="let c of columns" style="flex:1; border:1px solid #ddd; border-radius:8px; padding:8px;">
-          <h4 style="margin-top:0;">{{c.name}} ({{c.items.length}})</h4>
-          <article *ngFor="let i of c.items" style="padding:8px; border:1px solid #eee; border-radius:6px; margin:6px 0;">
+      <p>Project: <strong>{{projectKey}}</strong></p>
+
+      <section class="board">
+        <div class="col"
+             *ngFor="let c of columns()"
+             cdkDropList
+             [cdkDropListData]="c.items"
+             (cdkDropListDropped)="drop($event, c.name)">
+          <h4>{{c.name}} ({{c.items.length}})</h4>
+
+          <div class="card"
+               *ngFor="let i of c.items; trackBy: trackIssue"
+               cdkDrag
+               [cdkDragData]="i">
             <div><strong>#{{i.id}}</strong> — {{i.title}}</div>
             <div style="font-size:12px; color:#666;">type: {{i.type}}</div>
-          </article>
+          </div>
         </div>
       </section>
     </main>
   `
 })
 class AppComponent implements OnInit {
-  columns = [
-    { name: 'To Do', items: [] as any[] },
-    { name: 'In Progress', items: [] as any[] },
-    { name: 'Done', items: [] as any[] }
-  ];
+  projectKey = 'HOME';
+  columns = signal<{ name: string; items: Issue[] }[]>([
+    { name: 'To Do', items: [] },
+    { name: 'In Progress', items: [] },
+    { name: 'Done', items: [] }
+  ]);
+
+  trackIssue = (_: number, i: Issue) => i.id;
 
   async ngOnInit() {
+    // 1) Load workflow → set columns
+    const wf = await fetch(`/api/projects/${this.projectKey}/workflow`).then(r => r.json());
+    if (Array.isArray(wf) && wf.length) {
+      this.columns.set(wf.map((row: any) => ({ name: row.name, items: [] })));
+    }
+
+    // 2) Load issues → distribute into columns by status_name
+    const issues: Issue[] = await fetch(`/api/issues?project=${this.projectKey}`).then(r => r.json());
+    const cols = this.columns();
+    for (const i of issues) {
+      const name = i.status_name || cols[0].name;
+      (cols.find(c => c.name === name) || cols[0]).items.push(i);
+    }
+    this.columns.set([...cols]);
+  }
+
+  async drop(event: CdkDragDrop<Issue[]>, destName: string) {
+    const cols = this.columns();
+    if (event.previousContainer === event.container) {
+      moveItemInArray(event.container.data, event.previousIndex, event.currentIndex);
+    } else {
+      transferArrayItem(
+        event.previousContainer.data,
+        event.container.data,
+        event.previousIndex,
+        event.currentIndex
+      );
+    }
+    this.columns.set([...cols]);
+
+    // Persist status change
+    const moved: Issue = event.item.data;
     try {
-      const res = await fetch('/api/issues?project=HOME');
-      const issues = await res.json();
-      for (const i of issues) {
-        const name = i.status_name || 'To Do';
-        const col = this.columns.find(c => c.name === name) || this.columns[0];
-        col.items.push(i);
-      }
+      await fetch(`/api/issues/${moved.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_key: this.projectKey, status_name: destName })
+      });
     } catch (e) {
-      console.error('API fetch failed', e);
+      console.error('Failed to persist status', e);
+      // (Optional) TODO: revert UI move on error
     }
   }
 }
