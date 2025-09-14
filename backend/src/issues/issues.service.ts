@@ -4,18 +4,29 @@ import { DataSource } from 'typeorm';
 
 @Injectable()
 export class IssuesService {
-  constructor(@InjectDataSource() private ds: DataSource) {}
+  constructor(@InjectDataSource() private ds: DataSource) { }
 
   async search(projectKey?: string) {
-    if (!projectKey) return this.ds.query('select * from issues order by id desc limit 100');
-    return this.ds.query(`
-      select i.* from issues i
-      join projects p on p.id = i.project_id
-      where p.key = $1
+    if (!projectKey) {
+      return this.ds.query(`
+      select i.*, ws.name as status_name
+      from issues i
+      left join workflow_states ws on ws.id = i.status
       order by i.id desc
-      limit 200
-    `, [projectKey]);
+      limit 100
+    `);
+    }
+    return this.ds.query(`
+    select i.*, ws.name as status_name
+    from issues i
+    join projects p on p.id = i.project_id
+    left join workflow_states ws on ws.id = i.status
+    where p.key = $1
+    order by i.id desc
+    limit 200
+  `, [projectKey]);
   }
+
 
   async create(dto: { project_key: string; type: string; title: string; description?: string }) {
     const res = await this.ds.query('select id from projects where key=$1', [dto.project_key]);
@@ -39,7 +50,7 @@ export class IssuesService {
     const fields = Object.keys(dto);
     if (!fields.length) return this.ds.query('select * from issues where id=$1', [id]);
     const values = Object.values(dto);
-    const set = fields.map((k, i) => `${k}=$${i+1}`).join(',');
+    const set = fields.map((k, i) => `${k}=$${i + 1}`).join(',');
     const q = `update issues set ${set}, updated_at=now() where id=${id} returning *`;
     return this.ds.query(q, values);
   }

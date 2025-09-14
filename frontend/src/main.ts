@@ -37,8 +37,9 @@ class AppComponent implements OnInit {
       const res = await fetch('/api/issues?project=HOME');
       const issues = await res.json();
       for (const i of issues) {
-        // Phase-1: drop everything in To Do
-        this.columns[0].items.push(i);
+        const name = i.status_name || 'To Do';
+        const col = this.columns.find(c => c.name === name) || this.columns[0];
+        col.items.push(i);
       }
     } catch (e) {
       console.error('API fetch failed', e);

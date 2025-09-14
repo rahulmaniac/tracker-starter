@@ -28,13 +28,14 @@ services:
     volumes: [minio:/data]
 
   backend:
-    build: ./backend
+    image: ghcr.io/rahulmaniac/tracker-starter-backend:latest
     env_file: .env
     depends_on: [db, redis, minio]
 
   frontend:
-    build: ./frontend
+    image: ghcr.io/rahulmaniac/tracker-starter-frontend:latest
     depends_on: [backend]
+
 
   nginx:
     image: nginx:alpine
