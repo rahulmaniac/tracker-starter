@@ -1,0 +1,24 @@
+# env & secrets
+.env
+
+# Node/Angular
+node_modules/
+dist/
+.angular/
+
+# Build artifacts
+coverage/
+*.log
+
+# OS/editor
+.DS_Store
+.vscode/
+
+# Frontend build output (served by nginx image)
+frontend/dist/
+
+# Backend build output
+backend/dist/
+
+# Docker junk (not used but safe)
+docker-compose.override.yml
