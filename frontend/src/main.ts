@@ -11,15 +11,26 @@ type Issue = { id: string; title: string; type: string; status_name?: string };
   standalone: true,
   imports: [CommonModule, DragDropModule],
   styles: [`
+    header { padding:12px; border-bottom:1px solid #ddd; display:flex; gap:12px; align-items:center; }
     .board { display:flex; gap:12px; align-items:flex-start; }
     .col { flex:1; border:1px solid #ddd; border-radius:8px; padding:8px; min-height:120px; background:#fafafa; }
     .card { padding:8px; border:1px solid #eee; border-radius:6px; margin:6px 0; background:#fff; cursor:grab; }
     .col h4 { margin:4px 0 8px; }
+    .btn { padding:8px 12px; border:1px solid #ccc; border-radius:8px; background:#fff; cursor:pointer; }
+    dialog { border:none; border-radius:12px; padding:0; width:520px; max-width:95vw; }
+    .dlg { padding:16px; }
+    .row { display:flex; gap:12px; }
+    .row > * { flex:1; }
+    .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+    input, select, textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:8px; }
+    textarea { min-height: 100px; resize: vertical; }
   `],
   template: `
-    <header style="padding:12px;border-bottom:1px solid #ddd;">
-      <h2 style="margin:0;">Tracker — Phase-1</h2>
+    <header>
+      <h2 style="margin:0; flex:1;">Tracker — Phase-1</h2>
+      <button class="btn" (click)="openNew()">+ New Issue</button>
     </header>
+
     <main style="padding:16px;">
       <p>Project: <strong>{{projectKey}}</strong></p>
 
@@ -41,6 +52,35 @@ type Issue = { id: string; title: string; type: string; status_name?: string };
         </div>
       </section>
     </main>
+
+    <!-- Create Issue dialog -->
+    <dialog id="newIssue">
+      <form class="dlg" (submit)="submitNew($event)">
+        <h3 style="margin:0 0 12px;">Create Issue</h3>
+        <div class="row">
+          <label>Title
+            <input name="title" required placeholder="e.g. Wire Angular board" />
+          </label>
+          <label>Type
+            <select name="type">
+              <option value="TASK">Task</option>
+              <option value="STORY">Story</option>
+              <option value="BUG">Bug</option>
+              <option value="EPIC">Epic</option>
+              <option value="CHORE">Chore</option>
+              <option value="GROCERY">Grocery</option>
+            </select>
+          </label>
+        </div>
+        <label>Description
+          <textarea name="description" placeholder="Optional details..."></textarea>
+        </label>
+        <div class="actions">
+          <button type="button" class="btn" (click)="closeNew()">Cancel</button>
+          <button type="submit" class="btn">Create</button>
+        </div>
+      </form>
+    </dialog>
   `
 })
 class AppComponent implements OnInit {
@@ -84,7 +124,6 @@ class AppComponent implements OnInit {
     }
     this.columns.set([...cols]);
 
-    // Persist status change
     const moved: Issue = event.item.data;
     try {
       await fetch(`/api/issues/${moved.id}`, {
@@ -94,7 +133,44 @@ class AppComponent implements OnInit {
       });
     } catch (e) {
       console.error('Failed to persist status', e);
-      // (Optional) TODO: revert UI move on error
+    }
+  }
+
+  openNew() {
+    (document.getElementById('newIssue') as HTMLDialogElement).showModal();
+  }
+  closeNew() {
+    (document.getElementById('newIssue') as HTMLDialogElement).close();
+  }
+  async submitNew(ev: Event) {
+    ev.preventDefault();
+    const form = ev.target as HTMLFormElement;
+    const fd = new FormData(form);
+    const title = (fd.get('title') || '').toString().trim();
+    const type = (fd.get('type') || 'TASK').toString();
+    const description = (fd.get('description') || '').toString();
+
+    if (!title) return;
+
+    try {
+      const res = await fetch(`/api/issues`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_key: this.projectKey, type, title, description })
+      });
+      const createdArr = await res.json();
+      const created: Issue = Array.isArray(createdArr) ? createdArr[0] : createdArr;
+
+      // Put into first column by default (backend places it in the first workflow state)
+      const cols = this.columns();
+      created.status_name = cols[0].name;
+      cols[0].items.unshift(created);
+      this.columns.set([...cols]);
+
+      form.reset();
+      this.closeNew();
+    } catch (e) {
+      console.error('Create failed', e);
     }
   }
 }
