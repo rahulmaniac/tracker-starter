@@ -5,9 +5,13 @@ import { CommonModule } from '@angular/common';
 import { DragDropModule, CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop';
 import Keycloak, { KeycloakInstance } from 'keycloak-js';
 
+const KEYCLOAK_URL = 'http://192.168.0.225:8081';
+const KEYCLOAK_REALM = 'tracker';
+const KEYCLOAK_CLIENT = 'tracker-web';
+
 type Issue = { id: string; title: string; type: string; status_name?: string };
 
-// tiny toast
+// tiny toast system
 type Toast = { id: number; text: string };
 const toasts = signal<Toast[]>([]);
 let _toastId = 1;
@@ -43,14 +47,15 @@ function toast(text: string, ms = 2500) {
     <header>
       <h2 style="margin:0;">Tracker — Phase-1</h2>
       <div class="spacer"></div>
+
       <ng-container *ngIf="authUser(); else loggedOut">
         <span>👋 {{authUser()}}</span>
         <button class="btn" (click)="logout()">Logout</button>
+        <button class="btn" (click)="openNew()">+ New Issue</button>
       </ng-container>
       <ng-template #loggedOut>
         <button class="btn" (click)="login()">Login</button>
       </ng-template>
-      <button class="btn" (click)="openNew()">+ New Issue</button>
     </header>
 
     <main style="padding:16px;">
@@ -122,12 +127,12 @@ class AppComponent implements OnInit {
   trackIssue = (_: number, i: Issue) => i.id;
 
   async ngOnInit() {
-    // Keycloak init (guarded)
+    // Keycloak init
     try {
       const kc = new (Keycloak as any)({
-        url: 'http://192.168.0.225:8080',
-        realm: 'tracker',
-        clientId: 'tracker-web'
+        url: KEYCLOAK_URL,
+        realm: KEYCLOAK_REALM,
+        clientId: KEYCLOAK_CLIENT
       }) as KeycloakInstance;
       this.kc = kc;
 
@@ -141,6 +146,9 @@ class AppComponent implements OnInit {
         this.authUser.set(kc.tokenParsed?.preferred_username || kc.tokenParsed?.email || 'user');
         toast('Logged in');
       }
+
+      // refresh token periodically
+      setInterval(async () => { try { await this.kc?.updateToken?.(30); } catch { } }, 25000);
     } catch (e) {
       console.warn('Keycloak init skipped/failed', e);
     }
@@ -162,7 +170,7 @@ class AppComponent implements OnInit {
   }
 
   async login() {
-    if (!this.kc) return;
+    if (!this.kc) return toast('Auth not ready');
     try { await this.kc.login({ redirectUri: window.location.href }); } catch (e) { console.error(e); }
   }
   async logout() {
@@ -173,6 +181,16 @@ class AppComponent implements OnInit {
       toast('Logged out');
     } catch (e) { console.error(e); }
   }
+
+  private async authHeaders(): Promise<Record<string, string>> {
+    const h: Record<string, string> = {};
+    if (this.kc) {
+      try { await this.kc.updateToken?.(30); } catch { }
+      if (this.kc.token) h.Authorization = `Bearer ${this.kc.token}`;
+    }
+    return h;
+  }
+
 
   openNew() { (document.getElementById('newIssue') as HTMLDialogElement).showModal(); }
   closeNew() { (document.getElementById('newIssue') as HTMLDialogElement).close(); }
@@ -187,11 +205,19 @@ class AppComponent implements OnInit {
     if (!title) return;
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(await this.authHeaders())
+      };
       const res = await fetch(`/api/issues`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ project_key: this.projectKey, type, title, description })
       });
+      if (res.status === 401 || res.status === 403) {
+        toast('Please log in (or missing role)');
+        return this.login();
+      }
       const createdArr = await res.json();
       const created: Issue = Array.isArray(createdArr) ? createdArr[0] : createdArr;
 
@@ -219,11 +245,16 @@ class AppComponent implements OnInit {
 
     const moved: Issue = event.item.data;
     try {
-      await fetch(`/api/issues/${moved.id}`, {
+      const headers = { 'Content-Type': 'application/json', ...(await this.authHeaders()) };
+      const res = await fetch(`/api/issues/${moved.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ project_key: this.projectKey, status_name: destName })
       });
+      if (res.status === 401 || res.status === 403) {
+        toast('Please log in (or missing role)');
+        return this.login();
+      }
       toast(`Moved #${moved.id} → ${destName}`);
     } catch (e) {
       console.error('Failed to persist status', e);

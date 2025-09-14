@@ -1,4 +1,7 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { ProjectsService } from './projects.service';
 
 @Controller('projects')
@@ -11,6 +14,8 @@ export class ProjectsController {
   }
 
   @Post()
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('member')
   create(@Body() dto: { key: string; name: string }) {
     return this.svc.create(dto);
   }

@@ -1,0 +1,25 @@
+{
+  "realm": "tracker",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "tracker-web",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "redirectUris": ["http://192.168.0.225:8888/*"],
+      "webOrigins": ["+"],
+      "defaultClientScopes": ["web-origins","roles","profile","email"]
+    }
+  ],
+  "users": [
+    {
+      "username": "demo",
+      "enabled": true,
+      "email": "demo@example.com",
+      "credentials": [{ "type": "password", "value": "demo", "temporary": false }]
+    }
+  ]
+}
